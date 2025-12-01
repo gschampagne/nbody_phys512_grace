@@ -5,12 +5,14 @@ Built an N-body gravity simulator using a grid based potential rather than direc
 
 ## Table of Contents
 - [Core Algorithm](#core-algorithm)
+- [Requirements](#requirements)
+- [Usage](#usage)
 - [Phase 1: Setup and Classes](#phase-1)
 - [Phase 2: Physics Implementation](#phase-2)
 - [Phase 3: Large Simulations](#phase-3)
 - [Results Summary](#results-summary)
-- [Requirements](#requirements)
-- [Usage](#usage)
+- [Technical Notes](#technical-notes)
+- [Course Info](#course-information)
 
 ## Core Algorithm
 Methodology:
@@ -106,7 +108,7 @@ wehre F represents the fourier transform.
 
 Softened potential from a single particle is 
 ```math
-\phi_single = - \frac{G}{\sqrt{r^2 + \epsilon^2}}
+\phi_{single} = - \frac{G}{\sqrt{r^2 + \epsilon^2}}
 ```
 where `r` = length from the particle and `ε` = softening length. The softening is to prevent infinite force at r=0. 
 
@@ -159,7 +161,8 @@ E_{self} = C \sum_i m_i^2
 ```
 ```math
 \text{PE} = \text{PE}_{\text{raw}} - E_{self}
-where C = -3.499214×10⁻³ (determined from single particle calibration).
+```
+where `C = -3.499214×10^3` (determined from single particle calibration).
 
 Total energy is
 ```math
