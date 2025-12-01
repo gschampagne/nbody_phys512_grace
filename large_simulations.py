@@ -14,11 +14,7 @@ print(f"\nGenerating {n_particles} particles...")
 # random positions uniformly distributed in box
 pos_random = np.random.uniform(0, 1.0, size=(n_particles, 2))
 
-# initial velocities - two options:
-# option 1: zero velocities
-#vel_random = np.zeros((n_particles, 2))
-
-# option 2: random velocities 
+# random velocities 
 vel_random = np.random.normal(0, 0.1, size=(n_particles, 2))
 
 # equal mass particles
@@ -74,11 +70,8 @@ print("\nSaved plot to: large_sim_periodic.png")
 # non-periodic boundaries 
 print("\nLarge N Simulation - Non-Periodic Boundaries")
 
-# Use these settings for non-periodic only
-pos_nonperiodic = np.random.uniform(size=(n_particles, 2))
-vel_nonperiodic = np.random.normal(0, 0.1, size=(n_particles, 2))  # small velocities
 # use same initial conditions
-particles_large_np = Particle(pos_nonperiodic, vel_nonperiodic, mass_random.copy())
+particles_large_np = Particle(pos_random.copy(), vel_random.copy(), mass_random.copy())
 
 # create simulator with non-periodic boundaries
 sim_nonperiodic = NBodySimulator(

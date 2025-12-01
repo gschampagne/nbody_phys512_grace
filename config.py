@@ -24,7 +24,7 @@ class Particle:
         self.vel = np.array(velocities, dtype=float)
         self.mass = np.array(masses, dtype=float)
         
-        # Validate shapes
+        # check shapes
         if self.pos.shape[0] != self.vel.shape[0] or self.pos.shape[0] != self.mass.shape[0]:
             raise ValueError("Number of particles must match in positions, velocities, and masses")
         if self.pos.shape[1] != 2:
@@ -53,12 +53,10 @@ class Particle:
     def __repr__(self):
         return f"Particle(n={self.n_particles}, total_mass={np.sum(self.mass):.3e})"
 
-
 class NBodySimulator:
     """
     N-body gravity simulator using grid-based potential method.
     """
-    
     def __init__(self, particles, box_size, grid_res, dt, 
                  boundary='periodic', softening=None, G=1.0, print_output = True):
         """
@@ -92,7 +90,7 @@ class NBodySimulator:
         # grid spacing
         self.dx = box_size / grid_res
         
-        # softening parameter (default to 2 grid cells if not specified)
+        # softening parameter (default to 2 grid cells)
         if softening is None:
             self.softening = 2.0 * self.dx
         else:
@@ -167,10 +165,10 @@ class NBodySimulator:
         """
         density = np.zeros((self.grid_res, self.grid_res))
         
-        # Get CIC weights and indices
+        # get CIC weights and indices
         i, j, i1, j1, w00, w10, w01, w11 = self._cic_weights_and_indices(self.particles.pos)
         
-        # Deposit mass on 4 nearest cells
+        # deposit mass on 4 nearest cells
         for idx in range(self.particles.n_particles):
             m = self.particles.mass[idx]
             
@@ -188,35 +186,34 @@ class NBodySimulator:
         """
         n = self.grid_res
         
-        # Create coordinate arrays for the kernel
-        # Use indices that wrap properly for FFT
+        # create coordinate arrays for the kernel
+        # use indices that wrap properly for FFT
         x = np.arange(n) * self.dx
         y = np.arange(n) * self.dx
         
-        # For periodic boundary conditions with FFT, we need to shift coordinates
-        # so that the kernel is centered at (0,0) in the FFT sense
-        # This means: [0, dx, 2dx, ..., L/2, -L/2+dx, ..., -dx]
+        # for periodic boundary conditions with FFT, we need to shift coordinates
+        # so centered at (0,0)
         x = np.where(x > self.box_size/2, x - self.box_size, x)
         y = np.where(y > self.box_size/2, y - self.box_size, y)
         
-        # Create 2D grid
+        # create 2D grid
         xx, yy = np.meshgrid(x, y, indexing='ij')
         
-        # Distance from origin
+        # distance from origin
         r_squared = xx**2 + yy**2
         
-        # Softened potential kernel: phi = -G / sqrt(r^2 + eps^2)
+        # softened potential kernel: phi = -G / sqrt(r^2 + eps^2)
         r_soft = np.sqrt(r_squared + self.softening**2)
         potential_kernel = -self.G / r_soft
         
-        # Perform FFT convolution
+        # perform FFT convolution
         density_fft = np.fft.fft2(density)
         kernel_fft = np.fft.fft2(potential_kernel)
         
         potential_fft = density_fft * kernel_fft
         potential = np.real(np.fft.ifft2(potential_fft))
         
-        # Multiply by cell area to get correct units
+        # multiply by cell area to get correct units
         # density is in units of mass/area, so density * area * kernel = potential
         potential *= self.dx**2
         
@@ -242,23 +239,23 @@ class NBodySimulator:
         accel_y = np.zeros_like(potential)
         
         if self.boundary == 'periodic':
-            # Apply periodic boundary conditions manually for better control
-            # Use central differences everywhere with wrapping
+            # apply periodic boundary conditions manually for better control
+            # use central differences everywhere with wrapping
             accel_x[1:-1, :] = -(potential[2:, :] - potential[:-2, :]) / (2 * self.dx)
             accel_y[:, 1:-1] = -(potential[:, 2:] - potential[:, :-2]) / (2 * self.dx)
             
-            # Wrap at boundaries
+            # wrap at boundaries
             accel_x[0, :] = -(potential[1, :] - potential[-1, :]) / (2 * self.dx)
             accel_x[-1, :] = -(potential[0, :] - potential[-2, :]) / (2 * self.dx)
             accel_y[:, 0] = -(potential[:, 1] - potential[:, -1]) / (2 * self.dx)
             accel_y[:, -1] = -(potential[:, 0] - potential[:, -2]) / (2 * self.dx)
             
         else:
-            # Non-periodic: use central differences in interior
+            # non-periodic: use central differences in interior
             accel_x[1:-1, :] = -(potential[2:, :] - potential[:-2, :]) / (2 * self.dx)
             accel_y[:, 1:-1] = -(potential[:, 2:] - potential[:, :-2]) / (2 * self.dx)
             
-            # Forward/backward differences at boundaries
+            # forward/backward differences at boundaries
             accel_x[0, :] = -(potential[1, :] - potential[0, :]) / self.dx
             accel_x[-1, :] = -(potential[-1, :] - potential[-2, :]) / self.dx
             accel_y[:, 0] = -(potential[:, 1] - potential[:, 0]) / self.dx
@@ -271,13 +268,13 @@ class NBodySimulator:
         Interpolate acceleration from grid to particle positions.
         Uses Cloud-in-Cell (CIC) to match grid_particles().
         """
-        # Get CIC weights and indices
+        # get CIC weights and indices
         i, j, i1, j1, w00, w10, w01, w11 = self._cic_weights_and_indices(self.particles.pos)
         
         particle_accel = np.zeros((self.particles.n_particles, 2))
         
         for idx in range(self.particles.n_particles):
-            # Interpolate acceleration
+            # interpolate acceleration
             particle_accel[idx, 0] = (w00[idx] * accel_x[i[idx], j[idx]] +
                                        w10[idx] * accel_x[i1[idx], j[idx]] +
                                        w01[idx] * accel_x[i[idx], j1[idx]] +
@@ -326,24 +323,22 @@ class NBodySimulator:
         """
         ke = self.particles.kinetic_energy()
         
-        # Build density and potential (must match leapfrog_step)
+        # build density and potential (must match leapfrog_step)
         density = self.grid_particles()
         density -= density.mean()
         phi_grid = self.compute_potential(density)
         
-        # Interpolate potential to particles using CIC
+        # interpolate potential to particles using CIC
         i, j, i1, j1, w00, w10, w01, w11 = self._cic_weights_and_indices(self.particles.pos)
         phi_p = (w00 * phi_grid[i, j] +
                  w10 * phi_grid[i1, j] +
                  w01 * phi_grid[i, j1] +
                  w11 * phi_grid[i1, j1])
         
-        # PE from all interactions (includes self-energy)
+        # pE from all interactions (includes self-energy)
         pe_raw = 0.5 * np.sum(self.particles.mass * phi_p)
         
-        # Self-energy correction
-        # From single particle (m=1) calibration: E_self = -3.499214e-03
-        # For mass m: E_self = C * m^2, where C = -3.499214e-03
+        # self-energy correction from single particle (m=1) calibration
         C_self = -3.499214e-03
         self_energy = C_self * np.sum(self.particles.mass**2)
         
@@ -365,12 +360,12 @@ class NBodySimulator:
         print(f"\nRunning simulation for {n_steps} steps...")
         
         for step in range(n_steps):
-            # Advance one timestep
+            # advance one timestep
             self.leapfrog_step()
             self.time += self.dt
             self.step_count += 1
             
-            # Record energy periodically
+            # record energy periodically
             if step % output_interval == 0:
                 energy = self.compute_energy()
                 self.energy_history.append(energy)
@@ -394,8 +389,6 @@ class NBodySimulator:
         """
         if ax is None:
             fig, ax = plt.subplots(figsize=(6, 5))
-        
-        # default plotting options
         plot_kwargs = {'s': 1, 'alpha': 0.5, 'c': 'black'}
         plot_kwargs.update(kwargs)
         
