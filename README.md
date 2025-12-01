@@ -19,13 +19,14 @@ Methodology:
 3. Take gradient of potential: get acceleration field
 4. Integrate particle motion: update positions and velociety using leapfrog solver with a fixed timestep
 
-The project was completed in phases described below:
+The project was completed in phases described below.
 
 ## Requirements
 - NumPy
 - Matplotlib
 
 ## Usage
+The file `config.py` includes all necessary functions for the simulation.\
 To run the full project pipeline:
 ```bash
 python test.py                              # Phase 1 validation
@@ -35,7 +36,7 @@ python large_simulations.py                 # Phase 3 simulations
 
 ## Phase 1
 ### Setup and Classes
-Using techniques learned in class, created class structure
+Using techniques learned in class, created class structure in `config.py`.
 
 #### Class: Particle
 Initializes particle positions, velocities, and masses then validates array shapes.
@@ -91,7 +92,7 @@ they match!
 
 ## Phase 2
 ### Physics Implementation
-Added to class NBodySimulator the following functions
+Added to class NBodySimulator the following functions located in `config.py`.
 #### _cic_weights_and_indices
 Helper function that calculates Cloud-in-Cell interpolation weights and grid indices for particle positions. Returns the base indices (i, j), neighbor indices (i1, j1), and four bilinear weights (w00, w10, w01, w11) used in both gridding and interpolation steps.
 * first order accurate (2D cubic spline would be slower)
@@ -319,5 +320,5 @@ Figure 4: Direct comparison of boundary conditions. Top row: Final spatial distr
 - `Performance`: 300,000 particles for 500 steps for completes both simulations in ~20-30 minutes on M1 chip with 8GB of memory and 8 cores.
 
 ## Course Information
-PHYS 512 Final Project - Fall 2024
+PHYS 512 Final Project - Fall 2024\
 Written by Grace Champagne (grace.champagne@mail.mcgill.ca)
