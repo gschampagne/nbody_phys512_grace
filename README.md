@@ -121,17 +121,17 @@ For the interior points use central difference
 ```
 At boundary use forward and backward differences
 ```math
-\frac{\partial \phi}{\partial x} ≈ [\phi(i+1,j) - \phi(i,j)] / (delta x) \text{    (Forward)}
+\frac{\partial \phi}{\partial x} ≈ [\phi(i+1,j) - \phi(i,j)] / (\delta x) \text{    (Forward)}
 ```
 ```math
-\frac{\partial \phi}{\partial x} ≈ [\phi(i,j) - \phi(i-1,j)] / (delta x) \text{    (Backward)}
+\frac{\partial \phi}{\partial x} ≈ [\phi(i,j) - \phi(i-1,j)] / (\delta x) \text{    (Backward)}
 ```
 
 #### interpolate_acceleration
 Maps acceleration from grid back to particle positions using cloud in cell method to match grid_particles(). 
 
 #### leapfrog_step
-Use two step leapfrog to compute energy
+Use two step leapfrog to compute energy (like we did in class)
 ```python
 x = x + v * dt              # Drift: update positions
 dr = x[0,:] - x[1,:]        # Compute separation at NEW positions
