@@ -1,5 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import numba as nb
+from scipy import fft
+import os
+os.environ['OMP_NESTED'] = 'FALSE' # to get rid of an error
 
 class Particle:
     """
@@ -53,6 +57,115 @@ class Particle:
     def __repr__(self):
         return f"Particle(n={self.n_particles}, total_mass={np.sum(self.mass):.3e})"
 
+# numba implementation (FAST)
+@nb.njit(parallel=True)
+def _grid_particles_numba(pos, mass, grid_res, box_size, boundary):
+    """Numba-optimized particle gridding with CIC"""
+    density = np.zeros((grid_res, grid_res))
+    dx = box_size / grid_res
+    n_particles = pos.shape[0]
+    
+    for idx in nb.prange(n_particles):
+        # handle boundaries
+        if boundary == 1:  # periodic (use int flag for numba)
+            x = pos[idx, 0] % box_size
+            y = pos[idx, 1] % box_size
+        else:
+            x = pos[idx, 0]
+            y = pos[idx, 1]
+        
+        # grid coordinates
+        xg = x / dx
+        yg = y / dx
+        
+        i0 = int(np.floor(xg))
+        j0 = int(np.floor(yg))
+        tx = xg - i0
+        ty = yg - j0
+        
+        # neighbour indices
+        if boundary == 1:  # periodic
+            i = i0 % grid_res
+            j = j0 % grid_res
+            i1 = (i0 + 1) % grid_res
+            j1 = (j0 + 1) % grid_res
+        else:  # non-periodic
+            i = max(0, min(i0, grid_res - 1))
+            j = max(0, min(j0, grid_res - 1))
+            i1 = max(0, min(i0 + 1, grid_res - 1))
+            j1 = max(0, min(j0 + 1, grid_res - 1))
+        
+        # CIC weights
+        w00 = (1 - tx) * (1 - ty)
+        w10 = tx * (1 - ty)
+        w01 = (1 - tx) * ty
+        w11 = tx * ty
+        
+        m = mass[idx]
+        
+        # deposit mass (atomic add for thread safety)
+        density[i, j] += w00 * m
+        density[i1, j] += w10 * m
+        density[i, j1] += w01 * m
+        density[i1, j1] += w11 * m
+    
+    return density
+
+@nb.njit(parallel=True)
+def _interpolate_acceleration_numba(pos, accel_x, accel_y, grid_res, box_size, boundary):
+    """Numba-optimized acceleration interpolation"""
+    n_particles = pos.shape[0]
+    particle_accel = np.zeros((n_particles, 2))
+    dx = box_size / grid_res
+    
+    for idx in nb.prange(n_particles):
+        # handle boundaries
+        if boundary == 1:  # periodic
+            x = pos[idx, 0] % box_size
+            y = pos[idx, 1] % box_size
+        else:
+            x = pos[idx, 0]
+            y = pos[idx, 1]
+        
+        xg = x / dx
+        yg = y / dx
+        
+        i0 = int(np.floor(xg))
+        j0 = int(np.floor(yg))
+        tx = xg - i0
+        ty = yg - j0
+        
+        # neighbour indices
+        if boundary == 1:
+            i = i0 % grid_res
+            j = j0 % grid_res
+            i1 = (i0 + 1) % grid_res
+            j1 = (j0 + 1) % grid_res
+        else:
+            i = max(0, min(i0, grid_res - 1))
+            j = max(0, min(j0, grid_res - 1))
+            i1 = max(0, min(i0 + 1, grid_res - 1))
+            j1 = max(0, min(j0 + 1, grid_res - 1))
+        
+        # CIC weights
+        w00 = (1 - tx) * (1 - ty)
+        w10 = tx * (1 - ty)
+        w01 = (1 - tx) * ty
+        w11 = tx * ty
+        
+        # interpolate
+        particle_accel[idx, 0] = (w00 * accel_x[i, j] + 
+                                w10 * accel_x[i1, j] +
+                                w01 * accel_x[i, j1] + 
+                                w11 * accel_x[i1, j1])
+        
+        particle_accel[idx, 1] = (w00 * accel_y[i, j] + 
+                                w10 * accel_y[i1, j] +
+                                w01 * accel_y[i, j1] + 
+                                w11 * accel_y[i1, j1])
+    
+    return particle_accel
+
 class NBodySimulator:
     """
     N-body gravity simulator using grid-based potential method.
@@ -103,6 +216,7 @@ class NBodySimulator:
         # history for diagnostics
         self.energy_history = []
         self.time_history = []
+        self.position_history = []
         
         if print_output == False:
             return
@@ -138,7 +252,7 @@ class NBodySimulator:
         tx = xg - i0
         ty = yg - j0
     
-        # prepare neighbors
+        # prepare neighbours
         if self.boundary == 'periodic':
             i = i0 % self.grid_res
             j = j0 % self.grid_res
@@ -157,28 +271,12 @@ class NBodySimulator:
     
         return i, j, i1, j1, w00, w10, w01, w11
 
-
     def grid_particles(self):
-        """
-        Grid particle masses onto a 2D density field.
-        Uses Cloud-in-Cell (CIC) interpolation for smooth density.
-        """
-        density = np.zeros((self.grid_res, self.grid_res))
+        """Grid particle masses using numba-optimized CIC"""
+        boundary_flag = 1 if self.boundary == 'periodic' else 0
+        return _grid_particles_numba(self.particles.pos, self.particles.mass, 
+                                    self.grid_res, self.box_size, boundary_flag)
         
-        # get CIC weights and indices
-        i, j, i1, j1, w00, w10, w01, w11 = self._cic_weights_and_indices(self.particles.pos)
-        
-        # deposit mass on 4 nearest cells
-        for idx in range(self.particles.n_particles):
-            m = self.particles.mass[idx]
-            
-            density[i[idx], j[idx]] += w00[idx] * m
-            density[i1[idx], j[idx]] += w10[idx] * m
-            density[i[idx], j1[idx]] += w01[idx] * m
-            density[i1[idx], j1[idx]] += w11[idx] * m
-        
-        return density
-    
     def compute_potential(self, density):
         """
         Compute gravitational potential by convolving density with potential kernel.
@@ -205,18 +303,15 @@ class NBodySimulator:
         # softened potential kernel: phi = -G / sqrt(r^2 + eps^2)
         r_soft = np.sqrt(r_squared + self.softening**2)
         potential_kernel = -self.G / r_soft
-        
-        # perform FFT convolution
-        density_fft = np.fft.fft2(density)
-        kernel_fft = np.fft.fft2(potential_kernel)
+
+        # Use scipy's fft with workers for parallelization
+        density_fft = fft.fft2(density, workers=-1)  # -1 = use all cores
+        kernel_fft = fft.fft2(potential_kernel, workers=-1)
         
         potential_fft = density_fft * kernel_fft
-        potential = np.real(np.fft.ifft2(potential_fft))
+        potential = np.real(fft.ifft2(potential_fft, workers=-1))
         
-        # multiply by cell area to get correct units
-        # density is in units of mass/area, so density * area * kernel = potential
         potential *= self.dx**2
-        
         return potential
     
     def compute_acceleration(self, potential):
@@ -264,30 +359,11 @@ class NBodySimulator:
         return accel_x, accel_y
     
     def interpolate_acceleration(self, accel_x, accel_y):
-        """
-        Interpolate acceleration from grid to particle positions.
-        Uses Cloud-in-Cell (CIC) to match grid_particles().
-        """
-        # get CIC weights and indices
-        i, j, i1, j1, w00, w10, w01, w11 = self._cic_weights_and_indices(self.particles.pos)
-        
-        particle_accel = np.zeros((self.particles.n_particles, 2))
-        
-        for idx in range(self.particles.n_particles):
-            # interpolate acceleration
-            particle_accel[idx, 0] = (w00[idx] * accel_x[i[idx], j[idx]] +
-                                       w10[idx] * accel_x[i1[idx], j[idx]] +
-                                       w01[idx] * accel_x[i[idx], j1[idx]] +
-                                       w11[idx] * accel_x[i1[idx], j1[idx]])
-            
-            particle_accel[idx, 1] = (w00[idx] * accel_y[i[idx], j[idx]] +
-                                       w10[idx] * accel_y[i1[idx], j[idx]] +
-                                       w01[idx] * accel_y[i[idx], j1[idx]] +
-                                       w11[idx] * accel_y[i1[idx], j1[idx]])
-        
-        return particle_accel
+        """Interpolate acceleration using numba"""
+        boundary_flag = 1 if self.boundary == 'periodic' else 0
+        return _interpolate_acceleration_numba(self.particles.pos, accel_x, accel_y,
+                                                self.grid_res, self.box_size, boundary_flag)
 
-    
     def leapfrog_step(self):
         """
         Advance particles by one timestep using leapfrog integrator.
@@ -368,6 +444,7 @@ class NBodySimulator:
             # record energy periodically
             if step % output_interval == 0:
                 energy = self.compute_energy()
+                self.position_history.append(self.particles.pos.copy())
                 self.energy_history.append(energy)
                 self.time_history.append(self.time)
                 
@@ -379,13 +456,6 @@ class NBodySimulator:
     def plot_particles(self, ax=None, **kwargs):
         """
         Plot particle positions.
-        
-        Parameters:
-        -----------
-        ax : matplotlib axis, optional
-            Axis to plot on. If None, creates new figure.
-        **kwargs : dict
-            Additional arguments passed to scatter plot
         """
         if ax is None:
             fig, ax = plt.subplots(figsize=(6, 5))

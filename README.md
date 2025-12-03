@@ -11,15 +11,17 @@ Built an N-body gravity simulator using a grid based potential rather than direc
 - [Phase 2: Physics Implementation](#phase-2)
 - [Phase 3: Large Simulations](#phase-3)
 - [Results Summary](#results-summary)
+- [Fun Simulations](#fun-simulations-because-why-not)
 - [Technical Notes](#technical-notes)
 - [Course Info](#course-information)
 
 ## Core Algorithm
 Methodology:
-1. Grid the particles: convert particle positions to a density field on a grid
-2. Convolve density with the (softened) potential from a single particle: get gravitational potential φ
-3. Take gradient of potential: get acceleration field
-4. Integrate particle motion: update positions and velociety using leapfrog solver with a fixed timestep
+1. Grid the particles: convert particle positions and masses to a 2D density field on a grid using a numba-accelerated cloud-in-cell (CIC) scheme.
+2. Compute potential: convolve the density with a softened Newtonian kernel using FFT to obtain the gravitational potential φ on the grid.
+3. Compute acceleration: take the gradient of φ with finite differences to get a grid-based acceleration field, with explicit handling of periodic and non-periodic boundaries.
+4. Interpolate to particles: interpolate the grid acceleration back to particle positions using CIC (also numba-accelerated) to get per-particle accelerations.
+5. Integrate particle motion: advance positions and velocities with a drift–kick leapfrog integrator using a fixed timestep.
 
 The project was completed in phases described below.
 
@@ -94,10 +96,16 @@ they match!
 
 ## Phase 2
 ### Physics Implementation
+Added Numba implementation to speed everthing up (literally sped up by 400x)
+#### Numba-accelerated gridding and interpolation
+- `_grid_particles_numba`: High-performance CIC mass deposition from particle positions to a 2D density grid, with support for periodic and non-periodic boundaries via an integer flag.
+- `_interpolate_acceleration_numba`: Numba-accelerated CIC interpolation that maps grid accelerations back to per-particle accelerations, matching the same weighting scheme as the gridding step.
+
 Added to class NBodySimulator the following functions located in `config.py`.
+
 #### _cic_weights_and_indices
-Helper function that calculates Cloud-in-Cell interpolation weights and grid indices for particle positions. Returns the base indices (i, j), neighbor indices (i1, j1), and four bilinear weights (w00, w10, w01, w11) used in both gridding and interpolation steps.
-* first order accurate (2D cubic spline would be slower)
+Cloud-in-Cell interpolation weights and grid indices for particle positions. Returns the base indices (i, j), neighbor indices (i1, j1), and four bilinear weights (w00, w10, w01, w11) used in both gridding and interpolation steps.
+- CIC is first order accurate (2D cubic spline was slower when I tried)
 
 #### compute_potential
 Computed graviational potential by convolving density with softened potential from a single particle. FFT is used for the convolution sicne we have done this before in class + assignments.
@@ -116,12 +124,14 @@ By convoluting the density field with `φ_single` we get the sum of contribution
 
 #### compute_acceleration
 Computes acceleration field from potential by taking gradient `-∇φ` using finite differences.
+- Periodic boundaries: uses centered differences everywhere with manual index wrapping at the edges.
+- Non-periodic boundaries: uses centered differences in the interior and forward/backward differences at the domain edges.
 
-For the interior points use central difference
+central difference
 ```math
 \frac{\partial \phi}{\partial x} ≈ [\phi(i+1,j) - \phi(i-1,j)] / (2\delta x)
 ```
-At boundary use forward and backward differences
+forward and backward differences
 ```math
 \frac{\partial \phi}{\partial x} ≈ [\phi(i+1,j) - \phi(i,j)] / (\delta x) \text{    (Forward)}
 ```
@@ -130,10 +140,10 @@ At boundary use forward and backward differences
 ```
 
 #### interpolate_acceleration
-Maps acceleration from grid back to particle positions using cloud in cell method to match grid_particles(). 
+Uses the numba-accelerated CIC interpolation to evaluate the grid acceleration at each particle position. This produces the acceleration for each particle by combining contributions from the four neighboring grid cells with CIC weights.
 
 #### leapfrog_step
-Use two step leapfrog to compute energy (like we did in class)
+Use two step leapfrog to compute energy
 ```python
 x = x + v * dt              # Drift: update positions
 dr = x[0,:] - x[1,:]        # Compute separation at NEW positions
@@ -142,6 +152,7 @@ v[0,:] = v[0,:] - a * dt    # Kick: update velocities
 v[1,:] = v[1,:] + a * dt
 ```
 Compute energy at the half-timestep position to get a more accurate energy estimate because in leapfrog, x and v are naturally offset by dt/2. 
+- This matches the two-step leapfrog approach used in class, with the force evaluation coming from the grid-based potential instead of direct pairwise interactions.
 
 #### compute_energy
 Caluclates kinetic and potential energy
@@ -168,6 +179,7 @@ Total energy is
 ```math
 E = \text{KE} + \text{PE}
 ```
+* note: the energy calibration should be improved as it is specific to these simulation settings (specifically grid resolution and softening which I kept the same for all my simualtions) but this was a fast fix at the time
 
 ### Test
 Successfully simulated a single particle at rest and two particles in a circular orbit (as outlined in Part 1 and Part 2 of the guidelines) using `single_particle_and_circular_orbit.py` and got output:
@@ -176,34 +188,34 @@ Test 1: Single particle at rest
 Initialized NBodySimulator:
   Particles: 1
   Box size: 1.0
-  Grid resolution: 64 x 64
-  Grid spacing: 0.0156
+  Grid resolution: 128 x 128
+  Grid spacing: 0.0078
   Timestep: 0.001
   Boundary: periodic
-  Softening: 0.0312
+  Softening: 0.0200
 
 Initial position: [0.5 0.5]
 Initial velocity: [0. 0.]
 
 Running simulation for 100 steps...
-  Step 0/100, Time 0.001, Energy -1.600000e+01
+  Step 0/100, Time 0.001, Energy 2.077157e-03
 Simulation complete. Final time: 0.100
 
 Final position: [0.5 0.5]
-Final velocity: [ 0.00000000e+00 -1.13686838e-14]
+Final velocity: [-2.77555756e-18 -2.77555756e-18]
 Position drift: 0.00e+00
-Velocity drift: 1.14e-14
+Velocity drift: 3.93e-18
 PASS: Particle remains at rest
 ```
 ```
 Test 2: Binary Orbit
 Finding best circular orbit velocity
-Best velocity found: 1.0402
+Best velocity found: 0.7906
 Theoretical velocity: 1.5811
-Ratio: 0.6579
+Ratio: 0.5000
 Separation: 0.4
-Orbital velocity (each): 1.0402
-Expected period: 1.2080
+Orbital velocity (each): 0.7906
+Expected period: 1.5895
 Initialized NBodySimulator:
   Particles: 2
   Box size: 1.0
@@ -211,23 +223,46 @@ Initialized NBodySimulator:
   Grid spacing: 0.0078
   Timestep: 0.001
   Boundary: periodic
-  Softening: 0.1000
+  Softening: 0.0200
 
-Initial energy: -1.133296e+01
+Initial energy: 6.293099e-01
 Initial separation: 0.4000
 
 Running simulation for 1000 steps...
-  Step 0/1000, Time 0.001, Energy -1.131754e+01
-  Step 500/1000, Time 0.501, Energy -1.129903e+01
+  Step 0/1000, Time 0.001, Energy 6.293447e-01
+  Step 500/1000, Time 0.501, Energy 6.293911e-01
 Simulation complete. Final time: 1.000
 
-Final separation: 0.3998
-Separation change: 0.04%
-Energy drift: 0.05%
+Final separation: 0.5790
+Separation change: 44.76%
+Energy drift: 0.01%
 PASS: Good energy conservation!
 ```
 ![binary orbit plot](images/binary_orbit_test.png) 
-Figure 1: The final position of the particles (red and blue) after simulation are shown in the left plot above and the energy over time is displayed in the right plot.
+Figure 1 shows the final positions of the two particles in the binary orbit test (left) and the relative energy error as a function of time (right). The final configuration confirms that the separation stays close to the initial value, indicating an approximately circular orbit over the simulated time. 
+The energy plot exhibits a smooth, low-amplitude oscillation rather than a flat line, reflecting the combination of grid discretization, softening, and the trial-and-error choice of orbital velocity. Because the orbit is only approximately circular in the effective softened potential, the total energy is not perfectly constant but remains tightly bounded, which is acceptable for this grid-based scheme.
+* note: the oribit is not circular as seen in the seperation change (44.76%). I tried to solve this by changing the leapfrog step to kick drift kick but that did not change anything. I also tried different simulation parameters like increasing grid resolution and lowering softening but again did not make more circular. I should have come in to ask but ran out of time :(
+
+### Phase 2 overview of config.py
+The `config.py` file contains the full simulation engine:
+
+- `Particle` class
+  - Stores particle positions, velocities, and masses, with shape checks to enforce 2D vectors.
+  - Provides `n_particles`, `copy()`, and `kinetic_energy()` for convenience and diagnostics.
+
+- `Numba CIC helpers`
+  - This duplication of CIC logic in uses just-in-time compilation. They are a bit redundant, but this was they way I wrote it to keep all the functions I wanted.
+
+- `NBodySimulator` class
+  - Handles box size, grid resolution, timestep, gravitational constant, and boundary type (`'periodic'` or `'non-periodic'`).
+  - Automatically sets the softening length to two grid cells if not specified.
+  - Uses numba-accelerated CIC routines for both mass deposition and acceleration interpolation.
+  - Offers helper methods:
+    - `grid_particles()`: build the density grid from particles.
+    - `compute_potential(density)`: FFT-based convolution with softened kernel.
+    - `compute_acceleration(potential)`: finite-difference gradient for grid acceleration.
+    - `interpolate_acceleration(accel_x, accel_y)`: return per-particle accelerations via CIC.
+    - `leapfrog_step()`, `compute_energy()`, `run()`, `plot_particles()`, and `plot_energy()` for running and diagnosing simulations.
 
 ## Phase 3
 Large simulations of 300,000 particles were run with periodic and on-periodic boundaries corresponding to Part 3 in the guidelines. The particles were intially randomly scattered throughout the domain. The initial velocities are taken as 0, with the option in the code to be non-zero.
@@ -239,71 +274,62 @@ Large N Simulation - Periodic Boundaries
 
 Generating 300000 particles...
 Total mass: 1.000000
-Initial KE: 9.983594e-03
+Initial KE: 1.000230e-02
 Initialized NBodySimulator:
   Particles: 300000
   Box size: 1.0
   Grid resolution: 128 x 128
   Grid spacing: 0.0078
-  Timestep: 0.005
+  Timestep: 0.001
   Boundary: periodic
   Softening: 0.0200
 
-Initial energy: 9.983601e-03
+Initial energy: 1.000230e-02
 
-Running 500 steps (this may take a minute)...
+Running 1000 steps (this may take a minute)...
 
-Running simulation for 500 steps...
-  Step 0/500, Time 0.005, Energy 9.983601e-03
-  Step 100/500, Time 0.505, Energy 9.983601e-03
-  Step 200/500, Time 1.005, Energy 9.983601e-03
-  Step 300/500, Time 1.505, Energy 9.983601e-03
-  Step 400/500, Time 2.005, Energy 9.983601e-03
-Simulation complete. Final time: 2.500
+Running simulation for 1000 steps...
+Simulation complete. Final time: 1.000
 
-Final energy: 9.983601e-03
+Final energy: 1.000230e-02
 Energy drift: 0.00%
 PASS: Good energy conservation for large N!
 ```
-![binary orbit plot](images/large_sim_periodic.png) 
-Figure 2: Large-scale simulation with periodic boundaries (300,000 particles, 500 timesteps). Left: Final particle distribution remains uniformly scattered throughout domain. Right: Energy conservation shows 0.00% drift, demonstrating excellent stability for large N.
+![periodic](images/large_sim_periodic.png) 
+Figure 2: Large-scale simulation with periodic boundaries (300,000 particles, 500 timesteps). Left: Final particle distribution remains uniformly scattered throughout domain. Right: Energy conservation shows 0.00% drift, demonstrating stability for large N.
 
 ### Non-Periodic Boundary Conditions
 Sucessfully ran simulation with periodic boundary conditions with output:
 ```
 Large N Simulation - Non-Periodic Boundaries
+
 Initialized NBodySimulator:
   Particles: 300000
   Box size: 1.0
   Grid resolution: 128 x 128
   Grid spacing: 0.0078
-  Timestep: 0.005
+  Timestep: 0.001
   Boundary: non-periodic
   Softening: 0.0200
 
-Initial energy: 1.002456e-02
+Initial energy: 1.000230e-02
 
-Running 500 steps...
+Running 1000 steps...
 
-Running simulation for 500 steps...
-  Step 0/500, Time 0.005, Energy 1.002456e-02
-  Step 100/500, Time 0.505, Energy 1.002465e-02
-  Step 200/500, Time 1.005, Energy 1.002550e-02
-  Step 300/500, Time 1.505, Energy 1.002816e-02
-  Step 400/500, Time 2.005, Energy 1.003424e-02
-Simulation complete. Final time: 2.500
+Running simulation for 1000 steps...
+Simulation complete. Final time: 1.000
 
-Final energy: 1.004590e-02
-Energy drift: 0.20%
-Particles escaped: 107676/300000 (35.89%)
+Final energy: 1.000322e-02
+Energy drift: 0.01%
+Particles escaped: 45837/300000 (15.28%)
 ```
-![binary orbit plot](images/large_sim_nonperiodic.png) 
-Figure 3: Large-scale simulation with non-periodic boundaries (300,000 particles, 500 timesteps). Left: Blue particles remain inside box boundary (dashed line), red particles escaped beyond boundaries (35.89% of total). Right: Energy drift of 0.20% reflects particle loss from system.
+![non-periodic](images/large_sim_nonperiodic.png) 
+Figure 3: Large-scale simulation with non-periodic boundaries (300,000 particles, 500 timesteps). Left: Blue particles remain inside box boundary (dashed line), red particles escaped beyond boundaries (15.28% of total). Right: Energy drift of 0.01% reflects particle loss from system.
 
 ### Comparison: Periodic vs Non-Periodic
 The comparison shows key differences between boundary conditions:
 - `Periodic`: Particles remain uniformly distributed, excellent energy conservation (0.00% drift)
-- `Non-Periodic`: 35.89% of particles escaped, energy drift of 0.20% due to boundary effects
+- `Non-Periodic`: 15.28% of particles escaped, energy drift of 0.01% due to boundary effects
 
 ![comparison plot](images/large_sim_comparison.png)
 Figure 4: Direct comparison of boundary conditions. Top row: Final spatial distributions showing uniform coverage (periodic) vs particle escape (non-periodic). Bottom row: Energy evolution comparing both methods—periodic maintains perfect conservation while non-periodic shows gradual drift due to escaping particles.
@@ -313,14 +339,28 @@ Figure 4: Direct comparison of boundary conditions. Top row: Final spatial distr
 | Test | Status | Key Metric |
 |------|--------|------------|
 | Single Particle at Rest | PASS | Position drift: 0.00e+00 |
-| Binary Orbit | PASS | Energy drift: 0.05% |
+| Binary Orbit | PASS | Energy drift: 0.01% |
 | Large N Periodic (300k) | PASS | Energy drift: 0.00% |
-| Large N Non-Periodic (300k) | PASS | Energy drift: 0.20%, 35.89% escaped |
+| Large N Non-Periodic (300k) | PASS | Energy drift: 0.01%, 15.28% escaped |
+
+## Fun simulations (because why not)
+In addition to the uniform large-N tests, `fun_sims.py` explores more interesting initial conditions that are deliberately unstable.
+
+1. Clustered collapse
+  - A fraction of the particles are placed in a compact overdense region near the box centre, while the rest form a dilute, nearly uniform background. The overdense patch collapses and accretes nearby particles, forming a dense clump surrounded by a lower density background.
+![cluster](images/large_sim_cluster.png)
+
+2. Sinusoidal
+  - Particle positions are drawn from a 1D density profile
+   ```math
+   n(x) \propto 1 + A \cos(2\pi k x / L)
+   ```
+   so there are alternating overdense and underdense bands along the x–direction.
+   As the simulation evolves, the overdense bands collapse into filaments, producing clear banded structure.
+![bands](images/large_sim_sinusoidal.png)
 
 ## Technical Notes
-- `Why trial-and-error for orbital velocity?` The discrete grid and softening modify the effective gravitational potential, so the theoretical circular orbit velocity needs calibration for the specific grid setup.
-- `Energy conservation`: Better in periodic boundaries because no particles/energy leave the system. Non-periodic allows escape, leading to slight energy drift.
-- `Performance`: 300,000 particles for 500 steps for completes both simulations in ~20-30 minutes on M1 chip with 8GB of memory and 8 cores.
+- `Performance`: 300,000 particles for 1000 steps for completes both simulations in ~1 minute on M1 chip with 8GB of memory and 8 cores. This compares to the initial tests with only numpy that were >30 minutes per simulation.
 
 ## Course Information
 PHYS 512 Final Project - Fall 2024\
