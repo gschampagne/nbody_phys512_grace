@@ -53,7 +53,6 @@ axes[0].set_title(f'Periodic Boundaries - Final State (t={sim_periodic.time:.2f}
 sim_periodic.plot_energy(ax=axes[1])
 plt.tight_layout()
 #plt.savefig('images/large_sim_periodic.png')
-print("\nSaved plot to: large_sim_periodic.png")
 
 # non-periodic boundaries 
 print("\nLarge N Simulation - Non-Periodic Boundaries")
@@ -115,7 +114,6 @@ ax.legend()
 sim_nonperiodic.plot_energy(ax=axes[1])
 plt.tight_layout()
 #plt.savefig('images/large_sim_nonperiodic.png')
-print("\nSaved plot to: large_sim_nonperiodic.png")
 
 # comparison
 print("\nComparison: Periodic vs Non-Periodic")
@@ -150,4 +148,3 @@ axes[1, 1].set_title('Absolute Energy Evolution')
 axes[1, 1].legend()
 plt.tight_layout()
 #plt.savefig('images/large_sim_comparison.png')
-print("\nSaved comparison plot to: large_sim_comparison.png")

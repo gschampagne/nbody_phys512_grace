@@ -7,42 +7,23 @@ os.environ['OMP_NESTED'] = 'FALSE' # to get rid of an error
 
 class Particle:
     """
-    Holds particle data for N-body simulation.
-    Stores positions, velocities, and masses for multiple particles.
+    Particle data for N-body simulation.
     """
-    
     def __init__(self, positions, velocities, masses):
         """
-        Initialize particles.
-        
-        Parameters:
-        -----------
-        positions : array-like, shape (N, 2)
-            Particle positions [x, y] for each of N particles
-        velocities : array-like, shape (N, 2)
-            Particle velocities [vx, vy] for each of N particles
-        masses : array-like, shape (N,)
-            Particle masses
+        Parameters
+        ----------
+        positions, velocities, masses: array-like (N, 2)
         """
         self.pos = np.array(positions, dtype=float)
         self.vel = np.array(velocities, dtype=float)
         self.mass = np.array(masses, dtype=float)
-        
-        # check shapes
-        if self.pos.shape[0] != self.vel.shape[0] or self.pos.shape[0] != self.mass.shape[0]:
-            raise ValueError("Number of particles must match in positions, velocities, and masses")
-        if self.pos.shape[1] != 2:
-            raise ValueError("Positions must be 2D (N, 2)")
-        if self.vel.shape[1] != 2:
-            raise ValueError("Velocities must be 2D (N, 2)")
-    
+
     @property
     def n_particles(self):
-        """Return number of particles"""
         return len(self.mass)
     
     def copy(self):
-        """Create a deep copy of the Particle instance"""
         return Particle(
             positions=self.pos.copy(),
             velocities=self.vel.copy(),
@@ -50,7 +31,6 @@ class Particle:
         )
     
     def kinetic_energy(self):
-        """Calculate total kinetic energy: KE = 0.5 * sum(m * v^2)"""
         v_squared = np.sum(self.vel**2, axis=1)
         return 0.5 * np.sum(self.mass * v_squared)
     
@@ -60,7 +40,6 @@ class Particle:
 # numba implementation (FAST)
 @nb.njit(parallel=True)
 def _grid_particles_numba(pos, mass, grid_res, box_size, boundary):
-    """Numba-optimized particle gridding with CIC"""
     density = np.zeros((grid_res, grid_res))
     dx = box_size / grid_res
     n_particles = pos.shape[0]
@@ -103,7 +82,7 @@ def _grid_particles_numba(pos, mass, grid_res, box_size, boundary):
         
         m = mass[idx]
         
-        # deposit mass (atomic add for thread safety)
+        # deposit mass 
         density[i, j] += w00 * m
         density[i1, j] += w10 * m
         density[i, j1] += w01 * m
@@ -113,7 +92,6 @@ def _grid_particles_numba(pos, mass, grid_res, box_size, boundary):
 
 @nb.njit(parallel=True)
 def _interpolate_acceleration_numba(pos, accel_x, accel_y, grid_res, box_size, boundary):
-    """Numba-optimized acceleration interpolation"""
     n_particles = pos.shape[0]
     particle_accel = np.zeros((n_particles, 2))
     dx = box_size / grid_res
@@ -168,31 +146,30 @@ def _interpolate_acceleration_numba(pos, accel_x, accel_y, grid_res, box_size, b
 
 class NBodySimulator:
     """
-    N-body gravity simulator using grid-based potential method.
+    N-body gravity simulator
     """
     def __init__(self, particles, box_size, grid_res, dt, 
                  boundary='periodic', softening=None, G=1.0, print_output = True):
         """
-        Initialize the N-body simulator.
-        
-        Parameters:
-        -----------
-        particles : Particle
-            Particle object containing positions, velocities, masses
+        Parameters
+        ----------
+        particles : particle obj from Particle class
         box_size : float
-            Size of simulation box (assumed square: box_size x box_size)
+            size of simulation box (square)
         grid_res : int
-            Number of grid points per dimension
+            number of grid pts (2D)
         dt : float
-            Timestep for integration
+            fixed timestep
         boundary : str
-            'periodic' or 'non-periodic' boundary conditions
+            boundary conditions. The default is 'periodic'.
         softening : float, optional
-            Gravitational softening length (default: 2 * grid spacing)
-        G : float
-            Gravitational constant (default: 1.0)
-        print_output : if set to False does not print simulations params
+            softening length. default is None which = 2 * grid spacing.
+        G : float, optional
+            gravitational constant. The default is 1.0.
+        print_output : optional
+            optional to not print simulation params. The default is True.
         """
+        
         self.particles = particles.copy()  # store a copy to avoid external modifications
         self.box_size = box_size
         self.grid_res = grid_res
@@ -231,15 +208,9 @@ class NBodySimulator:
             print(f"  Softening: {self.softening:.4f}")
     
     def _cic_weights_and_indices(self, positions):
-        """
-        Given positions (N,2) return arrays for CIC interpolation:
-          i, j   : integer base indices (N,) - wrapped/clipped for boundaries
-          i1, j1 : integer +1 indices (N,) - wrapped/clipped for boundaries  
-          w00, w10, w01, w11 : weights (N,)
-        These match the deposition scheme in grid_particles().
-        """
-        # wrap for periodic
-        if self.boundary == 'periodic':
+        # given positions (N,2) return arrays for CIC interpolation
+        # see in depth explanation in README.md
+        if self.boundary == 'periodic': # wrap for periodic
             pos = np.mod(positions, self.box_size)
         else:
             pos = positions.copy()
@@ -272,24 +243,22 @@ class NBodySimulator:
         return i, j, i1, j1, w00, w10, w01, w11
 
     def grid_particles(self):
-        """Grid particle masses using numba-optimized CIC"""
+        # grid particle masses using numba CIC
         boundary_flag = 1 if self.boundary == 'periodic' else 0
         return _grid_particles_numba(self.particles.pos, self.particles.mass, 
                                     self.grid_res, self.box_size, boundary_flag)
-        
+    
     def compute_potential(self, density):
-        """
-        Compute gravitational potential by convolving density with potential kernel.
-        Uses FFT for efficient convolution.
-        """
+        # compute gravitational potential by convolving density with potential kernel
+        # FFT for efficient convolution.
+
         n = self.grid_res
         
         # create coordinate arrays for the kernel
-        # use indices that wrap properly for FFT
         x = np.arange(n) * self.dx
         y = np.arange(n) * self.dx
         
-        # for periodic boundary conditions with FFT, we need to shift coordinates
+        # for periodic boundary conditions with FFT need to shift coordinates
         # so centered at (0,0)
         x = np.where(x > self.box_size/2, x - self.box_size, x)
         y = np.where(y > self.box_size/2, y - self.box_size, y)
@@ -297,17 +266,14 @@ class NBodySimulator:
         # create 2D grid
         xx, yy = np.meshgrid(x, y, indexing='ij')
         
-        # distance from origin
-        r_squared = xx**2 + yy**2
-        
+        r_squared = xx**2 + yy**2  # distance from origin
         # softened potential kernel: phi = -G / sqrt(r^2 + eps^2)
         r_soft = np.sqrt(r_squared + self.softening**2)
         potential_kernel = -self.G / r_soft
 
-        # Use scipy's fft with workers for parallelization
+        # use fft with workers for parallelization
         density_fft = fft.fft2(density, workers=-1)  # -1 = use all cores
         kernel_fft = fft.fft2(potential_kernel, workers=-1)
-        
         potential_fft = density_fft * kernel_fft
         potential = np.real(fft.ifft2(potential_fft, workers=-1))
         
@@ -315,21 +281,8 @@ class NBodySimulator:
         return potential
     
     def compute_acceleration(self, potential):
-        """
-        Compute acceleration field from potential using gradient.
-        Acceleration = -grad(potential)
-        Uses central differences in interior, forward/backward at boundaries.
-        
-        Parameters:
-        -----------
-        potential : array, shape (grid_res, grid_res)
-            Gravitational potential on grid
-            
-        Returns:
-        --------
-        accel_x, accel_y : arrays, shape (grid_res, grid_res)
-            Acceleration field components
-        """
+        # compute acceleration field from potential using gradient: a = -grad(potential)
+        # uses central differences in interior, forward/backward at boundaries
         accel_x = np.zeros_like(potential)
         accel_y = np.zeros_like(potential)
         
@@ -359,21 +312,13 @@ class NBodySimulator:
         return accel_x, accel_y
     
     def interpolate_acceleration(self, accel_x, accel_y):
-        """Interpolate acceleration using numba"""
+        # nterpolate acceleration using numba
         boundary_flag = 1 if self.boundary == 'periodic' else 0
         return _interpolate_acceleration_numba(self.particles.pos, accel_x, accel_y,
                                                 self.grid_res, self.box_size, boundary_flag)
 
     def leapfrog_step(self):
-        """
-        Advance particles by one timestep using leapfrog integrator.
-        Drift-Kick scheme (as shown in class):
-        1. x(t+dt) = x(t) + v(t) * dt  [drift]
-        2. Compute a(t+dt) at new positions
-        3. v(t+dt) = v(t) + a(t+dt) * dt  [kick]
-        
-        Same methodoogy as two part leapfrog done in class
-        """
+        # same methodoogy as two part leapfrog done in class
         # drift: update positions first
         self.particles.pos += self.dt * self.particles.vel
         
@@ -393,13 +338,11 @@ class NBodySimulator:
         self.particles.vel += self.dt * accel
 
     def compute_energy(self):
-        """
-        Compute total energy (kinetic + potential) with self-energy correction.
-        Self-energy calibrated from single particle at rest test: E_self = -3.499214e-03 for m=1.
-        """
+        # compute total energy (kinetic + potential) with self-energy correction
+        # calibrated from single particle at rest test: E_self = -3.499214e-03 for m=1
         ke = self.particles.kinetic_energy()
         
-        # build density and potential (must match leapfrog_step)
+        # build density and potential
         density = self.grid_particles()
         density -= density.mean()
         phi_grid = self.compute_potential(density)
@@ -411,28 +354,18 @@ class NBodySimulator:
                  w01 * phi_grid[i, j1] +
                  w11 * phi_grid[i1, j1])
         
-        # pE from all interactions (includes self-energy)
+        # PE from all interactions (includes self-energy)
         pe_raw = 0.5 * np.sum(self.particles.mass * phi_p)
         
-        # self-energy correction from single particle (m=1) calibration
+        # self-energy correction from single particle test
         C_self = -3.499214e-03
         self_energy = C_self * np.sum(self.particles.mass**2)
         
         pe = pe_raw - self_energy
-        
         return ke + pe
         
     def run(self, n_steps, output_interval=10):
-        """
-        Run the simulation for n_steps.
-        
-        Parameters:
-        -----------
-        n_steps : int
-            Number of timesteps to run
-        output_interval : int
-            How often to save energy (every output_interval steps)
-        """
+        # run the simulation for n_steps.
         print(f"\nRunning simulation for {n_steps} steps...")
         
         for step in range(n_steps):
@@ -448,15 +381,13 @@ class NBodySimulator:
                 self.energy_history.append(energy)
                 self.time_history.append(self.time)
                 
-                if step % (output_interval * 10) == 0:
+                if step % (output_interval * 10) == 0: # defined by input
                     print(f"  Step {step}/{n_steps}, Time {self.time:.3f}, Energy {energy:.6e}")
         
         print(f"Simulation complete. Final time: {self.time:.3f}")
     
     def plot_particles(self, ax=None, **kwargs):
-        """
-        Plot particle positions.
-        """
+        # plot particle positions.
         if ax is None:
             fig, ax = plt.subplots(figsize=(6, 5))
         plot_kwargs = {'s': 1, 'alpha': 0.5, 'c': 'black'}
@@ -473,9 +404,7 @@ class NBodySimulator:
         return ax
     
     def plot_energy(self, ax=None):
-        """
-        Plot energy conservation over time.
-        """
+        # plot energy conservation over time.
         if ax is None:
             fig, ax = plt.subplots(figsize=(4, 5))
         
